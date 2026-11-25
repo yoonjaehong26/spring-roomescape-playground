@@ -3,8 +3,6 @@ package roomescape;
 import java.net.URI;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentSkipListMap;
-import java.util.concurrent.atomic.AtomicLong;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -21,20 +19,19 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 public class ReservationController {
 
-    // 데이터베이스 대신 서버 메모리에 보관한다. 키는 예약 ID이며, ID 순서로 조회된다.
-    private final ConcurrentSkipListMap<Long, Reservation> reservations =
-            new ConcurrentSkipListMap<>();
+    private final ReservationRepository reservationRepository;
 
-    // 새 예약의 ID를 만든다. 서버를 재시작하면 이 값도 초기화된다.
-    private final AtomicLong nextId = new AtomicLong();
+    public ReservationController(ReservationRepository reservationRepository) {
+        this.reservationRepository = reservationRepository;
+    }
 
     /**
      * GET /reservations 요청을 처리한다.
-     * 저장된 예약 목록의 복사본을 반환하면 Spring이 JSON 배열로 응답한다.
+     * 데이터베이스에서 읽은 예약 목록을 Spring이 JSON 배열로 응답한다.
      */
     @GetMapping("/reservations")
     public List<Reservation> readReservations() {
-        return List.copyOf(reservations.values());
+        return reservationRepository.findAll();
     }
 
     /**
@@ -43,19 +40,14 @@ public class ReservationController {
      */
     @PostMapping("/reservations")
     public ResponseEntity<Reservation> createReservation(@RequestBody ReservationRequest request) {
-        // 1. 요청을 먼저 검사한다. 실패하면 ID 생성과 저장까지 진행하지 않는다.
+        // 1. 요청을 먼저 검사한다. 실패하면 INSERT하지 않는다.
         request.validate();
 
-        // 2. 서버가 새 ID를 만들고, 요청 데이터를 예약 객체로 묶는다.
-        long id = nextId.incrementAndGet();
-        Reservation reservation = new Reservation(
-                id, request.name(), request.date(), request.time());
+        // 2. 저장 후 데이터베이스가 생성한 ID를 포함한 예약을 받는다.
+        Reservation reservation = reservationRepository.save(request);
 
-        // 3. ID를 키로 예약을 저장한다.
-        reservations.put(id, reservation);
-
-        // 4. 201 Created, Location 헤더, 생성된 예약 JSON을 응답한다.
-        URI location = URI.create("/reservations/" + id);
+        // 3. 201 Created, Location 헤더, 생성된 예약 JSON을 응답한다.
+        URI location = URI.create("/reservations/" + reservation.id());
         return ResponseEntity.created(location).body(reservation);
     }
 
@@ -65,8 +57,8 @@ public class ReservationController {
      */
     @DeleteMapping("/reservations/{id}")
     public ResponseEntity<Void> deleteReservation(@PathVariable long id) {
-        // remove는 해당 ID가 없으면 null을 돌려준다.
-        if (reservations.remove(id) == null) {
+        // DELETE가 지운 행이 없다면 요청한 예약이 존재하지 않는다.
+        if (!reservationRepository.deleteById(id)) {
             return ResponseEntity.notFound().build();
         }
 
